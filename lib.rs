@@ -1,5 +1,8 @@
-//#![cfg_attr(not(feature = "std"), no_std)]
 
+
+#![cfg_attr(not(feature = "std"), no_std)]
+
+#[macro_use]
 extern crate alloc;
 
 use pink::PinkEnvironment;
@@ -15,7 +18,6 @@ mod dRuntime {
     use pink::http_get;
     use pink_web3::api::{Accounts, Eth, Namespace};
     use pink_web3::contract::{Contract, Options};
-    use pink_web3::keys::pink::KeyPair;
     use pink_web3::transports::{resolve_ready, PinkHttp};
     use pink_web3::types::TransactionParameters;
     use pink_web3::types::{FilterBuilder, H160};
@@ -41,15 +43,6 @@ mod dRuntime {
             }
         }
 
-        fn tx(&self) {
-            let key = KeyPair::derive_keypair(b"pink-wallet");
-            let tx = TransactionParameters::default();
-            let signed = resolve_ready(self.accounts().sign_transaction(tx, &key)).unwrap();
-            self.eth()
-                .send_raw_transaction(signed.raw_transaction)
-                .resolve()
-                .unwrap();
-        }
 
         async fn fetch_contract_events(&self) -> pink_web3::contract::Result<String> {
             let contract_address = "0xC50fC6Ef39f1436382051562edfe1b70Fb4262b6";

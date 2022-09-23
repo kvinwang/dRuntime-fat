@@ -6,20 +6,24 @@ edition = "2018"
 resolver = "2"
 
 [dependencies]
-ink_primitives = { version = "3.1.0", default-features = false }
-ink_metadata = { version = "3.1.0", default-features = false, features = ["derive"], optional = true }
-ink_env = { version = "3.1.0", default-features = false }
-ink_storage = { version = "3.1.0", default-features = false }
-ink_lang = { version = "3.1.0", default-features = false }
+ink_primitives = { version = "3.0", default-features = false }
+ink_metadata = { version = "3.0", default-features = false, features = ["derive"], optional = true }
+ink_env = { version = "3.0", default-features = false }
+ink_storage = { version = "3.0", default-features = false }
+ink_lang = { version = "3.0", default-features = false }
 
 scale = { package = "parity-scale-codec", version = "3.0", default-features = false, features = ["derive"] }
 scale-info = { version = "2.0", default-features = false, features = ["derive"], optional = true }
 
 pink-extension = { version = "0.1.0", default-features = false }
-pink-web3 = { version = "0.19.1", default-features = false, features = ["pink", "signing"] }
+pink-web3 = { version = "0.19.1", default-features = false, features = ["pink"] }
 
-hex = "0.4"
-hex-literal = "0.3"
+hex =  { version = "0.4", default-features = false }
+hex-literal = "0.3.4"
+
+
+[dev-dependencies]
+pink-extension-runtime = "0.1"
 
 [dependencies.futures]
 version = "0.3.5"
@@ -47,5 +51,8 @@ std = [
     "scale/std",
     "scale-info/std",
     "pink-web3/std",
+    "hex/std",
+    "ink_env/std",
+    "ink_lang/std",
 ]
 ink-as-dependency = []
