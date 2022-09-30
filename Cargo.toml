@@ -21,9 +21,13 @@ pink-web3 = { version = "0.19.1", default-features = false, features = ["pink"] 
 hex =  { version = "0.4", default-features = false }
 hex-literal = "0.3.4"
 
+# for openapi 
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
+openapiv3 = { version = "1.0.1", default-features = false}
 
 [dev-dependencies]
 pink-extension-runtime = "0.1"
+env_logger = "0.9.0"
 
 [dependencies.futures]
 version = "0.3.5"

@@ -21,6 +21,9 @@ mod dRuntime {
     use pink_web3::types::TransactionParameters;
     use pink_web3::types::{FilterBuilder, H160};
 
+    use serde_json;
+    use openapiv3::OpenAPI;
+
     #[ink(storage)]
     pub struct Web3 {
         url: String,
@@ -34,13 +37,13 @@ mod dRuntime {
         #[ink(constructor)]
         pub fn default() -> Self {
             Self {
-                url: "https://rinkeby.infura.io/v3/".into(),
+                url: "https://rpc.api.moonbase.moonbeam.network".into(),
             }
         }
 
         fn fetch_contract_events(&self) -> pink_web3::contract::Result<String> {
             // let contract_address = "0xC50fC6Ef39f1436382051562edfe1b70Fb4262b6";
-            let contract_address = hex!("d028d24f16a8893bd078259d413372ac01580769").into();
+            let contract_address = hex!("7Fb6A9B3b359a05E58a574395fd75A358995A2E7").into();
             // let my_account: = hex!("d028d24f16a8893bd078259d413372ac01580769").into();
             // let addr = H160::from_slice(contract_address.as_bytes());
             let contract = Contract::from_json(
@@ -55,7 +58,7 @@ mod dRuntime {
                 .build();
             pink::debug!("fetching logs");
             let log = self.eth().logs(filter).resolve().map_err(|e| {
-                pink::debug!("error: {:?}", e);
+                pink::error!("error: {:?}", e);
                 e
             })?;
             for l in log {
@@ -69,12 +72,19 @@ mod dRuntime {
             //let result: Future<Output = Result<String>> =
             //    contract.query("getName", (my_account,), None, Options::default(), None);
             //let res: String = result.await?;
+
+
             Ok(String::from("Good"))
         }
 
         //#[pink(on_block_end)]
         #[ink(message)]
         pub fn on_block_end(&self) {
+            // openapiv3 test
+            let data = include_str!("openapi.json");
+            let openapi: OpenAPI = serde_json::from_str(data).expect("Could not deserialize input");
+            pink::debug!("{:?}", openapi);
+
             let block_num = self.env().block_number();
             pink::debug!("block_num: {:?}", block_num);
             // retrieve events every 12*3 seconds
@@ -90,9 +100,12 @@ mod dRuntime {
         use super::*;
 
         use ink_lang as ink;
+        use std::env;
 
         #[ink::test]
         fn tx_works() {
+            env::set_var("RUST_LOG", "debug");
+            env_logger::init();
             pink_extension_runtime::mock_ext::mock_all_ext();
             let web3 = Web3::default();
             _ = web3.on_block_end();
