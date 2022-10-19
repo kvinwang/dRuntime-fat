@@ -4,6 +4,10 @@ version = "0.1.0"
 authors = ["[your_name] <[your_email]>"]
 edition = "2021"
 
+# Necessary due to the cargo bug bug: https://github.com/rust-lang/cargo/issues/10118
+[profile.release]
+overflow-checks = false
+
 [dependencies]
 ink_primitives = { version = "3", default-features = false }
 ink_metadata = { version = "3", default-features = false, features = ["derive"], optional = true }
@@ -17,21 +21,24 @@ primitive-types = { version = "0.11", default-features = false, features = ["cod
 
 hex-literal = { version = "0.3", default-features = false }
 pink-extension = { version = "0.1", default-features = false }
-pink-extension-runtime = { version = "0.1", default-features = false }
 pink-web3 = { version = "0.19", default-features = false, features = ["pink", "signing"] }
 ethabi = { version = "17.2.0", package = "pink-ethabi", default-features = false, features = [
     "serde",
     "rlp",
 ] }
 
-phat_offchain_rollup = { path = "../rollup", default-features = false }
+phat_offchain_rollup = { git = "https://github.com/Phala-Network/phat-stateful-rollup.git", default-features = false }
+
+[dev-dependencies]
+pink-extension-runtime = { version = "0.1", default-features = false }
 
 [lib]
 name = "sample_oracle"
-path = "lib.rs"
+path = "src/lib.rs"
 crate-type = [
 	# Used for normal contract Wasm blobs.
 	"cdylib",
+    "lib",
 ]
 
 [features]
