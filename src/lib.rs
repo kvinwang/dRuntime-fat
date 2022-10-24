@@ -3,19 +3,27 @@
 extern crate alloc;
 
 use ink_lang as ink;
+use pink_extension as pink;
+//use serde_json;
 
 pub use sample_oracle::*;
 
 #[ink::contract(env = pink_extension::PinkEnvironment)]
 mod sample_oracle {
+    use super::{pink, serde_json};
+
+    use abi::ABI;
     use alloc::{string::String, vec::Vec};
     use ink_storage::traits::{PackedLayout, SpreadLayout};
     use phat_offchain_rollup::{
-        lock::{Locks, GLOBAL as GLOBAL_LOCK},
-        platforms::Evm,
-        RollupHandler, RollupResult, RollupTx,
+        clients::evm::read::{Action, QueuedRollupSession},
+        lock::GLOBAL as GLOBAL_LOCK,
+        RollupHandler, RollupResult,
     };
+    use pink::http_get;
     use primitive_types::U256;
+    use pink_web3::ethabi;
+    use primitive_types::H160;
     use scale::{Decode, Encode};
 
     /// Defines the storage of your contract.
@@ -28,17 +36,16 @@ mod sample_oracle {
     }
 
     #[derive(Encode, Decode, Debug, PackedLayout, SpreadLayout)]
-    #[cfg_attr(
-        feature = "std",
-        derive(scale_info::TypeInfo, ink_storage::traits::StorageLayout)
+    #[cfg_attr(derive(scale_info::TypeInfo, ink_storage::traits::StorageLayout)
     )]
     struct Config {
         rpc: String,
         anchor: [u8; 20],
+        spec: String,
     }
 
     #[derive(Encode, Decode, Debug)]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    #[cfg_attr(derive(scale_info::TypeInfo))]
     pub enum Error {
         BadOrigin,
         NotConfigurated,
@@ -46,6 +53,8 @@ mod sample_oracle {
         FailedToGetStorage,
         FailedToDecodeStorage,
         FailedToEstimateGas,
+        FailedToDecodeParams,
+        FailedToDecodeResBody,
     }
 
     type Result<T> = core::result::Result<T, Error>;
@@ -61,80 +70,122 @@ mod sample_oracle {
 
         /// Configures the rollup target
         #[ink(message)]
-        pub fn config(&mut self, rpc: String, anchor: H160) -> Result<()> {
+        pub fn config(&mut self, rpc: String, anchor: H160, spec: String) -> Result<()> {
             self.ensure_owner()?;
             self.config = Some(Config {
                 rpc,
                 anchor: anchor.into(),
+                spec,
             });
             Ok(())
         }
 
         fn handle_req(&self) -> Result<Option<RollupResult>> {
-            let Config { rpc, anchor } = self.config.as_ref().ok_or(Error::NotConfigurated)?;
-
-            let mut tx = RollupTx::default();
-            let locks = locks();
-
-            // Connect to Ethereum RPC
-            let anchor = AnchorQueryClient::connect(rpc, anchor.into())?;
-            let vstore = BlockingVersionStore { anchor: &anchor };
+            let Config { rpc, anchor, spec } =
+                self.config.as_ref().ok_or(Error::NotConfigurated)?;
+                let mut rollup = QueuedRollupSession::new(rpc, anchor.into(), b"q", |_locks| {});
 
             // Declare write to global lock since it pops an element from the queue
-            locks
-                .tx_write(&mut tx, &vstore, GLOBAL_LOCK)
-                .expect("lock must succeed");
+            rollup
+                .lock_write(GLOBAL_LOCK)
+                .expect("FIXME: failed to fetch lock");
 
-            // Read the queue pointer from the Anchor Contract
-            let start: u32 = anchor.read_u256(b"qstart")?.try_into().unwrap();
-            let end: u32 = anchor.read_u256(b"qend")?.try_into().unwrap();
-            #[cfg(feature = "std")]
-            {
-                println!("start: {}", start);
-                println!("end: {}", end);
-            }
-            if start == end {
-                return Ok(None);
-            }
-
-            // Read the queue content
-            let queue_data = anchor.read_raw(&queue_key(b"q", start))?;
+            // Read the first item in the queue (return if the queue is empty)
+            let (raw_item, idx) = rollup
+                .queue_head()
+                .expect("FIXME: failed to read queue head");
+            let raw_item = match raw_item {
+                Some(v) => v,
+                _ => return Ok(None),
+            };
 
             // Decode the queue data by ethabi (u256, bytes)
-            use pink_web3::ethabi;
             let decoded = ethabi::decode(
                 &[ethabi::ParamType::Uint(32), ethabi::ParamType::Bytes],
-                &queue_data,
+                &raw_item,
             )
             .or(Err(Error::FailedToDecodeStorage))?;
+
             let (rid, pair) = match decoded.as_slice() {
                 [ethabi::Token::Uint(reqid), ethabi::Token::Bytes(content)] => (reqid, content),
                 _ => return Err(Error::FailedToDecodeStorage),
             };
+
+            let encoded_params = ethabi::decode(
+                &[ethabi::ParamType::Array(Box::new(
+                    ethabi::ParamType::FixedBytes(32),
+                ))],
+                &pair,
+            );
+            let mut ss = Vec::new();
+            for param in encoded_params.unwrap().into_iter() {
+                if let ethabi::Token::FixedBytes(bytes) = param {
+                    let mut buf = [0u8; 32];
+                    buf.copy_from_slice(&bytes);
+                    let v = U256::from_big_endian(&buf);
+                    ss.push(v);
+                }
+            }
+
             // Print the human readable request
-            let pair = String::from_utf8(pair.clone()).unwrap();
             #[cfg(feature = "std")]
-            println!("Got req ({}, {})", rid, pair);
+            println!("Got req ({}, {:?})", rid, ss);
 
-            // Get the price from somewhere
-            // let price = get_price(pair);
-            // let encoded_price = encode(price);
+            let abi = ABI::decode(&ss, true).or(Err(Error::FailedToDecodeParams))?;
 
+            #[cfg(feature = "std")]
+            println!("Got decoded params abi {:?}", abi);
+
+            let mut url_params = vec![];
+            abi.params.iter().for_each(|param| {
+                url_params.push(param.get_name().to_owned() + "=" + &param.get_value().to_owned());
+            });
+            let url_suffix = abi
+                .params
+                .iter()
+                .filter(|param| !param.get_name().starts_with("_"))
+                .map(|param| param.get_name().to_string() + "=" + &param.get_value().to_string())
+                .collect::<Vec<String>>()
+                .join("&");
+
+            #[cfg(feature = "std")]
+            println!("Got url suffix {:?}", url_suffix);
+
+            let resp = http_get!(
+                "https://api.coingecko.com/api/v3/simple/price?".to_string() + &url_suffix
+            );
+
+            // TODO check resp code
+            let body = resp.body;
+            let root = serde_json::from_slice::<serde_json::Value>(&body)
+                .or(Err(Error::FailedToDecodeResBody))?;
+
+            // TODO use macro to generate the code
+            // 1. get path field
+            // 2. generate the code
+            let price = root.get("ethereum").and_then(|value| value.get("usd")).and_then(|value|value.as_str()).unwrap();
+
+            
+            let encoded_price = U256::from_dec_str(price).unwrap();
+
+            //let mut price_bytes = [0u8; 32];
+            //encoded_price.to_big_endian(&mut price_bytes);
             // Apply the response to request
+            //let payload = ethabi::encode(&[
+            //    ethabi::Token::Uint(*rid),
+            //    ethabi::Token::FixedBytes(price_bytes.to_vec()),
+            //]);
             let payload = ethabi::encode(&[
                 ethabi::Token::Uint(*rid),
-                ethabi::Token::Uint(19800_000000_000000_000000u128.into()),
+                ethabi::Token::Uint(encoded_price),
             ]);
 
-            tx.action(Action::Reply(payload))
-                .action(Action::ProcessedTo(start + 1));
+            rollup
+                .tx_mut()
+                .action(Action::Reply(payload))
+                .action(Action::ProcessedTo(idx + 1));
 
-            let result = RollupResult {
-                tx,
-                signature: None,
-                target: None,
-            };
-            Ok(Some(result))
+            Ok(Some(rollup.build()))
         }
 
         /// Returns BadOrigin error if the caller is not the owner
@@ -154,143 +205,35 @@ mod sample_oracle {
         }
     }
 
-    use pink_web3::api::{Eth, Namespace};
-    use pink_web3::contract::{Contract, Options};
-    use pink_web3::transports::{resolve_ready, PinkHttp};
-    use pink_web3::types::{Bytes, H160};
-
-    enum Action {
-        Reply(Vec<u8>),
-        ProcessedTo(u32),
-    }
-
-    // conver to Vec<u8> for EVM
-    impl Into<Vec<u8>> for Action {
-        fn into(self) -> Vec<u8> {
-            use core::iter::once;
-            match self {
-                Action::Reply(data) => once(1u8).chain(data.into_iter()).collect(),
-                Action::ProcessedTo(n) => [2u8, 0u8]
-                    .into_iter()
-                    .chain(u256_be(n.into()).into_iter())
-                    .collect(),
-            }
-        }
-    }
-
-    fn u256_be(n: U256) -> [u8; 32] {
-        let mut r = [0u8; 32];
-        n.to_big_endian(&mut r);
-        r
-    }
-
-    /// The client to query anchor contract states
-    struct AnchorQueryClient {
-        address: H160,
-        contract: Contract<PinkHttp>,
-    }
-
-    fn queue_key(prefix: &[u8], idx: u32) -> Vec<u8> {
-        let mut be_idx = [0u8; 32];
-        U256::from(idx).to_big_endian(&mut be_idx);
-        let mut key = Vec::from(prefix);
-        key.extend(&be_idx);
-        key
-    }
-
-    impl AnchorQueryClient {
-        fn connect(rpc: &String, address: H160) -> Result<Self> {
-            let eth = Eth::new(PinkHttp::new(rpc));
-            let contract = Contract::from_json(eth, address, include_bytes!("../resources/main/anchor.abi.json"))
-                .or(Err(Error::BadAbi))?;
-
-            Ok(Self { address, contract })
-        }
-
-        fn read_raw(&self, key: &[u8]) -> Result<Vec<u8>> {
-            let key: Bytes = key.into();
-            let value: Bytes = resolve_ready(self.contract.query(
-                "getStorage",
-                (key,),
-                self.address,
-                Options::default(),
-                None,
-            ))
-            .unwrap();
-            #[cfg(feature = "std")]
-            println!("{:?}", value);
-            // FIXME
-            // ).or(Err(Error::FailedToGetStorage))?;
-
-            Ok(value.0)
-        }
-
-        fn _read_typed<T: Decode + Default>(&self, key: &[u8]) -> Result<T> {
-            let data = self.read_raw(key)?;
-            if data.is_empty() {
-                return Ok(Default::default());
-            }
-            T::decode(&mut &data[..]).or(Err(Error::FailedToDecodeStorage))
-        }
-
-        fn read_u256(&self, key: &[u8]) -> Result<U256> {
-            let data = self.read_raw(key)?;
-            if data.is_empty() {
-                return Ok(Default::default());
-            }
-            if data.len() != 32 {
-                return Err(Error::FailedToDecodeStorage);
-            }
-            Ok(U256::from_big_endian(&data))
-        }
-    }
-
-    // TODO: mock locks
-    fn locks() -> Locks<Evm> {
-        let mut locks = Locks::default();
-        locks
-            .add("queue", GLOBAL_LOCK)
-            .expect("defining lock should succeed");
-        locks
-    }
-
-    use phat_offchain_rollup::lock::{LockId, LockVersion, LockVersionReader};
-
-    struct BlockingVersionStore<'a> {
-        anchor: &'a AnchorQueryClient,
-    }
-    impl<'a> LockVersionReader for BlockingVersionStore<'a> {
-        fn get_version(&self, id: LockId) -> phat_offchain_rollup::Result<LockVersion> {
-            let id: Vec<u8> = phat_offchain_rollup::lock::EvmLocks::key(id).into();
-            let value = self
-                .anchor
-                .read_u256(&id)
-                .expect("FIXME: assume successful");
-            let value: u32 = value.try_into().expect("version musn't exceed u32");
-            Ok(value)
-        }
-    }
-
     #[cfg(test)]
     mod tests {
         use super::*;
-
         use ink_lang as ink;
 
-        #[ink::test]
-        fn default_works() {
-            pink_extension_runtime::mock_ext::mock_all_ext();
-
+        fn consts() -> (String, H160) {
+            use std::env;
+            dotenvy::dotenv().ok();
             /*
              Deployed {
                 anchor: '0xb3083F961C729f1007a6A1265Ae6b97dC2Cc16f2',
                 oracle: '0x8Bf50F8d0B62017c9B83341CB936797f6B6235dd'
             }
             */
+            let rpc = env::var("RPC").unwrap();
+            let anchor_addr: [u8; 20] =
+                hex::decode(env::var("ANCHOR_ADDR").expect("env not found"))
+                    .expect("hex decode failed")
+                    .try_into()
+                    .expect("invald length");
+            let anchor_addr: H160 = anchor_addr.into();
+            (rpc, anchor_addr)
+        }
 
-            let rpc =
-                "https://eth-goerli.g.alchemy.com/v2/68LXpUy0t0sLfZT2U-iYY5xh5OA8L6RV".to_string();
-            let anchor_addr: H160 = hex!("b3083F961C729f1007a6A1265Ae6b97dC2Cc16f2").into();
+        #[ink::test]
+        fn default_works() {
+            pink_extension_runtime::mock_ext::mock_all_ext();
+
+            let (rpc, anchor_addr) = consts();
 
             let mut sample_oracle = SampleOracle::default();
             sample_oracle.config(rpc, anchor_addr).unwrap();

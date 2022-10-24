@@ -23,13 +23,20 @@ hex-literal = { version = "0.3", default-features = false }
 pink-extension = { version = "0.1", default-features = false }
 pink-web3 = { version = "0.19", default-features = false, features = ["pink", "signing"] }
 ethabi = { version = "17.2.0", package = "pink-ethabi", default-features = false, features = [
-    "serde",
+    #"serde",
     "rlp",
 ] }
 
 phat_offchain_rollup = { git = "https://github.com/Phala-Network/phat-stateful-rollup.git", default-features = false }
 
+abi = { git = "https://github.com/SaaS3-Foundation/abi.git" }
+
+#serde-json-core = { version = "0.4.0", default-features = false }
+#serde_json = { version = "1.0.64", default-features = false, features = ["alloc"] }
+
 [dev-dependencies]
+dotenvy = "0.15"
+hex = "0.4"
 pink-extension-runtime = { version = "0.1", default-features = false }
 
 [lib]
@@ -54,4 +61,5 @@ std = [
     "pink-extension/std",
     "pink-web3/std",
 ]
+
 ink-as-dependency = []
