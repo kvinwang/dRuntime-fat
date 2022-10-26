@@ -3,28 +3,27 @@
 extern crate alloc;
 
 use ink_lang as ink;
-use pink_extension as pink;
-//use serde_json;
 
-pub use sample_oracle::*;
+pub use crate::sample_oracle::*;
 
 #[ink::contract(env = pink_extension::PinkEnvironment)]
 mod sample_oracle {
-    use super::{pink, serde_json};
-
-    use abi::ABI;
-    use alloc::{string::String, vec::Vec};
+    use alloc::{string::String, vec::Vec, string::ToString};
     use ink_storage::traits::{PackedLayout, SpreadLayout};
     use phat_offchain_rollup::{
         clients::evm::read::{Action, QueuedRollupSession},
         lock::GLOBAL as GLOBAL_LOCK,
         RollupHandler, RollupResult,
     };
-    use pink::http_get;
-    use primitive_types::U256;
+    use pink_extension as pink;
     use pink_web3::ethabi;
     use primitive_types::H160;
     use scale::{Decode, Encode};
+
+    use abi::ABI;
+    use primitive_types::U256;
+    use pink::http_get;
+    use serde_json;
 
     /// Defines the storage of your contract.
     /// Add new fields to the below struct in order
@@ -36,16 +35,17 @@ mod sample_oracle {
     }
 
     #[derive(Encode, Decode, Debug, PackedLayout, SpreadLayout)]
-    #[cfg_attr(derive(scale_info::TypeInfo, ink_storage::traits::StorageLayout)
+    #[cfg_attr(
+        feature = "std",
+        derive(scale_info::TypeInfo, ink_storage::traits::StorageLayout)
     )]
     struct Config {
         rpc: String,
         anchor: [u8; 20],
-        spec: String,
     }
 
     #[derive(Encode, Decode, Debug)]
-    #[cfg_attr(derive(scale_info::TypeInfo))]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub enum Error {
         BadOrigin,
         NotConfigurated,
@@ -55,6 +55,7 @@ mod sample_oracle {
         FailedToEstimateGas,
         FailedToDecodeParams,
         FailedToDecodeResBody,
+        MultiplyTimesOverflow,
     }
 
     type Result<T> = core::result::Result<T, Error>;
@@ -70,20 +71,18 @@ mod sample_oracle {
 
         /// Configures the rollup target
         #[ink(message)]
-        pub fn config(&mut self, rpc: String, anchor: H160, spec: String) -> Result<()> {
+        pub fn config(&mut self, rpc: String, anchor: H160) -> Result<()> {
             self.ensure_owner()?;
             self.config = Some(Config {
                 rpc,
                 anchor: anchor.into(),
-                spec,
             });
             Ok(())
         }
 
         fn handle_req(&self) -> Result<Option<RollupResult>> {
-            let Config { rpc, anchor, spec } =
-                self.config.as_ref().ok_or(Error::NotConfigurated)?;
-                let mut rollup = QueuedRollupSession::new(rpc, anchor.into(), b"q", |_locks| {});
+            let Config { rpc, anchor } = self.config.as_ref().ok_or(Error::NotConfigurated)?;
+            let mut rollup = QueuedRollupSession::new(rpc, anchor.into(), b"q", |_locks| {});
 
             // Declare write to global lock since it pops an element from the queue
             rollup
@@ -106,41 +105,34 @@ mod sample_oracle {
             )
             .or(Err(Error::FailedToDecodeStorage))?;
 
-            let (rid, pair) = match decoded.as_slice() {
+            let (rid, parameter_abi_bytes) = match decoded.as_slice() {
                 [ethabi::Token::Uint(reqid), ethabi::Token::Bytes(content)] => (reqid, content),
                 _ => return Err(Error::FailedToDecodeStorage),
             };
 
-            let encoded_params = ethabi::decode(
-                &[ethabi::ParamType::Array(Box::new(
-                    ethabi::ParamType::FixedBytes(32),
-                ))],
-                &pair,
-            );
-            let mut ss = Vec::new();
-            for param in encoded_params.unwrap().into_iter() {
-                if let ethabi::Token::FixedBytes(bytes) = param {
-                    let mut buf = [0u8; 32];
-                    buf.copy_from_slice(&bytes);
-                    let v = U256::from_big_endian(&buf);
-                    ss.push(v);
-                }
-            }
-
-            // Print the human readable request
-            #[cfg(feature = "std")]
-            println!("Got req ({}, {:?})", rid, ss);
-
-            let abi = ABI::decode(&ss, true).or(Err(Error::FailedToDecodeParams))?;
+            // 
+            //let tokens_of_params = ethabi::decode(
+            //    &[ethabi::ParamType::Array(Box::new(
+            //        ethabi::ParamType::FixedBytes(32),
+            //    ))],
+            //    &parameter_abi_bytes,
+            //);
+            //let mut abi256 = Vec::new();
+            //for param in tokens_of_params.unwrap().into_iter() {
+            //    if let ethabi::Token::FixedBytes(bytes) = param {
+            //        //let mut buf = [0u8; 32];
+            //        //buf.copy_from_slice(&bytes);
+            //        //let v = U256::from_big_endian(&buf);
+            //        abi256.push(U256::from_big_endian(&bytes));
+            //    }
+            //}
+            //let decoded_abi = ABI::decode(&abi256, true).or(Err(Error::FailedToDecodeParams))?;
+            let decoded_abi = ABI::decode_from_slice(parameter_abi_bytes, true).or(Err(Error::FailedToDecodeParams))?;
 
             #[cfg(feature = "std")]
-            println!("Got decoded params abi {:?}", abi);
+            println!("Got decoded params abi {:?}", decoded_abi);
 
-            let mut url_params = vec![];
-            abi.params.iter().for_each(|param| {
-                url_params.push(param.get_name().to_owned() + "=" + &param.get_value().to_owned());
-            });
-            let url_suffix = abi
+            let url_suffix = decoded_abi
                 .params
                 .iter()
                 .filter(|param| !param.get_name().starts_with("_"))
@@ -155,6 +147,9 @@ mod sample_oracle {
                 "https://api.coingecko.com/api/v3/simple/price?".to_string() + &url_suffix
             );
 
+            #[cfg(feature = "std")]
+            println!("Got response {:?}", resp.body);
+
             // TODO check resp code
             let body = resp.body;
             let root = serde_json::from_slice::<serde_json::Value>(&body)
@@ -163,21 +158,18 @@ mod sample_oracle {
             // TODO use macro to generate the code
             // 1. get path field
             // 2. generate the code
-            let price = root.get("ethereum").and_then(|value| value.get("usd")).and_then(|value|value.as_str()).unwrap();
+            let price = root.get("ethereum").and_then(|value| value.get("usd")).and_then(|value|value.as_f64()).unwrap();
 
-            
-            let encoded_price = U256::from_dec_str(price).unwrap();
+            let encoded_price = U256::from_dec_str(price.to_string().as_str()).unwrap();
+            let (onchain_price, over) = encoded_price.overflowing_mul(1000000.into());
+            if over == true {
+                return Err(Error::MultiplyTimesOverflow);
+            }
 
-            //let mut price_bytes = [0u8; 32];
-            //encoded_price.to_big_endian(&mut price_bytes);
             // Apply the response to request
-            //let payload = ethabi::encode(&[
-            //    ethabi::Token::Uint(*rid),
-            //    ethabi::Token::FixedBytes(price_bytes.to_vec()),
-            //]);
             let payload = ethabi::encode(&[
                 ethabi::Token::Uint(*rid),
-                ethabi::Token::Uint(encoded_price),
+                ethabi::Token::FixedBytes(onchain_price.encode()),
             ]);
 
             rollup
