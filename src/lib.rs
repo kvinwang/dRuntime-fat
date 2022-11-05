@@ -81,6 +81,9 @@ mod sample_oracle {
         }
 
         fn handle_req(&self) -> Result<Option<RollupResult>> {
+            #[cfg(feature = "std")]
+            println!("handling req");
+
             let Config { rpc, anchor } = self.config.as_ref().ok_or(Error::NotConfigurated)?;
             let mut rollup = QueuedRollupSession::new(rpc, anchor.into(), b"q", |_locks| {});
 
@@ -97,6 +100,9 @@ mod sample_oracle {
                 Some(v) => v,
                 _ => return Ok(None),
             };
+
+            #[cfg(feature = "std")]
+            println!("raw_item {:?}", raw_item);
 
             // Decode the queue data by ethabi (u256, bytes)
             let decoded = ethabi::decode(
@@ -232,6 +238,18 @@ mod sample_oracle {
 
             let res = sample_oracle.handle_req().unwrap();
             println!("res: {:#?}", res);
+        }
+
+        #[ink::test]
+        fn http_get_works() {
+            pink_extension_runtime::mock_ext::mock_all_ext();
+            let resp = http_get!(
+                "https://localhost:3301/saas3/web2/qatar2022/played?home=Qatar&guest=Ecuador"
+            );
+            assert_eq!(resp.status_code, 200);
+            println!("resp: {:#?}", resp.body);
+
+
         }
     }
 }
