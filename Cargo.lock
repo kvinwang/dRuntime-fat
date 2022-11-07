@@ -454,10 +454,11 @@ dependencies = [
  "pink-ethabi",
  "pink-extension",
  "pink-extension-runtime",
+ "pink-json 0.4.0 (git+https://github.com/Phala-Network/pink-json.git?branch=pink)",
  "pink-web3",
  "primitive-types",
  "scale-info",
- "serde_json",
+ "serde",
 ]
 
 [[package]]
@@ -1649,6 +1650,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pink-json"
+version = "0.4.0"
+source = "git+https://github.com/Phala-Network/pink-json.git?branch=pink#ff1be4b26ae409b8efeb08bf2e6df9e983bf7b3b"
+dependencies = [
+ "ryu",
+ "serde",
+]
+
+[[package]]
 name = "pink-web3"
 version = "0.19.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1664,7 +1674,7 @@ dependencies = [
  "pink-erased-serde",
  "pink-ethabi",
  "pink-extension",
- "pink-json",
+ "pink-json 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rlp",
  "serde",
  "tiny-keccak",
