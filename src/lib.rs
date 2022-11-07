@@ -158,15 +158,21 @@ mod sample_oracle {
 
             // TODO check resp code
             let body = resp.body;
-            let root = serde_json::from_slice::<serde_json::Value>(&body)
-                .or(Err(Error::FailedToDecodeResBody))?;
 
-            // TODO use macro to generate the code
-            // 1. get path field
-            // 2. generate the code
-            let price = root.get("ethereum").and_then(|value| value.get("usd")).and_then(|value|value.as_f64()).unwrap();
+            #[derive(serde::Deserialize)]
+            struct EthereumUsd {
+                ethereum: Usd,
+            }
 
-            let encoded_price = U256::from_dec_str(price.to_string().as_str()).unwrap();
+            #[derive(serde::Deserialize)]
+            struct Usd {
+                usd: String,
+            }
+
+            let price: EthereumUsd =
+                pink_json::from_slice(&body).or(Err(Error::FailedToDecodeResBody))?;
+
+            let encoded_price = U256::from_dec_str(&price.ethereum.usd).unwrap();
             let (onchain_price, over) = encoded_price.overflowing_mul(1000000.into());
             if over == true {
                 return Err(Error::MultiplyTimesOverflow);
